@@ -16,11 +16,15 @@
 		"@astrojs/mdx": "4.3.12",
 		"@astrojs/rss": "4.0.14",
 		"@astrojs/sitemap": "3.6.0",
+		"@tailwindcss/vite": "^4.2.1",
 		"astro": "5.16.2",
+		"hyparquet": "^1.25.0",
+		"hyparquet-compressors": "^1.1.1",
+		"tailwindcss": "^4.2.1",
 		"typescript": "5.9.3"
 	},
 	"devDependencies": {
-		"wrangler": "4.56.0"
+		"wrangler": "^4.68.1"
 	},
 	"private": true,
 	"scripts": {

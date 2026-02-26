@@ -1,0 +1,70 @@
+---
+import Layout from "../layouts/BlogPost.astro";
+---
+
+<Layout
+  title="Testing data pull"
+  description="Lorem ipsum"
+  pubDate={new Date("August 08 2021")}
+  heroImage="/blog-placeholder-about.jpg"
+>
+  <h2>Testing data from r2 bucket</h2>
+
+  <button
+    class="rounded-md bg-blue-600 py-0.5 px-2.5 border border-transparent text-sm text-white transition-all shadow-sm"
+    data-load-button>Load data!</button
+  >
+
+  <div
+    id="output"
+    style="white-space: pre-wrap; font-family: monospace; margin-top: 20px;"
+  >
+    No data loaded yet.
+  </div>
+
+  <div class="size-40" id="map"></div>
+
+  <script>
+    import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
+    import { compressors } from "hyparquet-compressors";
+
+    const buttons = document.querySelectorAll("[data-load-button]");
+    const outputElement = document.getElementById("output");
+
+    async function loadData(event: { currentTarget: any }) {
+      const clickedButton = event.currentTarget;
+      if (outputElement) outputElement.style.display = "block";
+      clickedButton.style.display = "none";
+      try {
+        if (outputElement) outputElement.textContent = "Loading...";
+
+        const url =
+          "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
+        const file = await asyncBufferFromUrl({ url });
+
+        const data = await parquetReadObjects({
+          file,
+          compressors,
+          columns: ["stateprovince", "individualcount"],
+          rowStart: 10,
+          rowEnd: 20,
+        });
+
+        if (outputElement) {
+          outputElement.textContent = JSON.stringify(data, null, 2);
+        }
+      } catch (error) {
+        console.error("Error:", error);
+        if (outputElement) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          outputElement.textContent = "Error: " + errorMessage;
+        }
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", loadData);
+    });
+  </script>
+</Layout>
