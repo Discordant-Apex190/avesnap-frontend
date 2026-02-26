@@ -12,7 +12,7 @@
 		"publish": true
 	},
 	"dependencies": {
-		"@astrojs/cloudflare": "12.6.12",
+		"@astrojs/cloudflare": "^12.6.12",
 		"@astrojs/mdx": "4.3.12",
 		"@astrojs/rss": "4.0.14",
 		"@astrojs/sitemap": "3.6.0",
@@ -20,6 +20,8 @@
 		"astro": "5.16.2",
 		"hyparquet": "^1.25.0",
 		"hyparquet-compressors": "^1.1.1",
+		"leaflet": "^1.9.4",
+		"leaflet.markercluster": "^1.5.3",
 		"tailwindcss": "^4.2.1",
 		"typescript": "5.9.3"
 	},

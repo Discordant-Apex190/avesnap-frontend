@@ -3,68 +3,140 @@ import Layout from "../layouts/BlogPost.astro";
 ---
 
 <Layout
-  title="Testing data pull"
-  description="Lorem ipsum"
+  title="State Counts Map"
+  description="Mapping GBIF data"
   pubDate={new Date("August 08 2021")}
-  heroImage="/blog-placeholder-about.jpg"
 >
-  <h2>Testing data from r2 bucket</h2>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
 
-  <button
-    class="rounded-md bg-blue-600 py-0.5 px-2.5 border border-transparent text-sm text-white transition-all shadow-sm"
-    data-load-button>Load data!</button
+  <h2>Bird Counts by State</h2>
+  <button id="load-map-btn" class="bg-blue-600 text-white px-4 py-2 rounded"
+    >Load Map Data</button
   >
 
   <div
-    id="output"
-    style="white-space: pre-wrap; font-family: monospace; margin-top: 20px;"
+    id="map"
+    style="height: 500px; width: 100%; margin-top: 20px; border-radius: 8px;"
   >
-    No data loaded yet.
   </div>
 
-  <div class="size-40" id="map"></div>
-
   <script>
-    import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
-    import { compressors } from "hyparquet-compressors";
+  import L from "leaflet";
+  import "leaflet.markercluster";
+  import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
+  import { compressors } from "hyparquet-compressors";
 
-    const buttons = document.querySelectorAll("[data-load-button]");
-    const outputElement = document.getElementById("output");
+  const btn = document.getElementById("load-map-btn") as HTMLButtonElement | null;
+  const formatter = new Intl.NumberFormat("en-US");
 
-    async function loadData(event: { currentTarget: any }) {
-      const clickedButton = event.currentTarget;
-      if (outputElement) outputElement.style.display = "block";
-      clickedButton.style.display = "none";
-      try {
-        if (outputElement) outputElement.textContent = "Loading...";
+  const compactFormatter = new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  });
 
-        const url =
-          "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
-        const file = await asyncBufferFromUrl({ url });
+  const map = L.map("map").setView([37.8, -96], 4);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap",
+  }).addTo(map);
 
-        const data = await parquetReadObjects({
-          file,
-          compressors,
-          columns: ["stateprovince", "individualcount"],
-          rowStart: 10,
-          rowEnd: 20,
-        });
+  async function initMap() {
+    if (!btn) return;
+    btn.style.display = "none";
 
-        if (outputElement) {
-          outputElement.textContent = JSON.stringify(data, null, 2);
-        }
-      } catch (error) {
-        console.error("Error:", error);
-        if (outputElement) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          outputElement.textContent = "Error: " + errorMessage;
-        }
+    try {
+      const url = "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
+      const file = await asyncBufferFromUrl({ url });
+
+      interface BirdRow {
+        stateprovince: string;
+        individualcount: number;
+        decimallatitude: number;
+        decimallongitude: number;
+        vernacularName: string;
       }
-    }
 
-    buttons.forEach((button) => {
-      button.addEventListener("click", loadData);
-    });
-  </script>
+      const data = (await parquetReadObjects({
+        file,
+        compressors,
+        rowFormat: "object",
+        columns: ["stateprovince", "individualcount", "decimallatitude", "decimallongitude", "vernacularName"],
+      })) as BirdRow[];
+      const isInUS = (lat: number, lng: number) => {
+      // 1. Lower 48 States (Contiguous US)
+      // We tighten the North-East corner to avoid Ontario/Quebec
+      const isContiguous = lat >= 24.39 && lat <= 49.38 && lng >= -125.0 && lng <= -66.93;
+      const isNotInEasternCanada = !(lng > -95 && lng < -67 && lat > 45.0);
+
+      // 2. Alaska 
+      // Lat: 51° to 72° N | Lng: -179° to -129° W
+      const isAlaska = lat >= 51.0 && lat <= 72.0 && lng >= -179.9 && lng <= -129.0;
+
+      // 3. Hawaii
+      // Lat: 18° to 23° N | Lng: -161° to -154° W
+      const isHawaii = lat >= 18.0 && lat <= 23.0 && lng >= -161.0 && lng <= -154.0;
+
+      return (isContiguous && isNotInEasternCanada) || isAlaska || isHawaii;
+      };
+      // @ts-ignore
+      const markers = L.markerClusterGroup({
+        iconCreateFunction: (cluster: any) => {
+          const childMarkers = cluster.getAllChildMarkers();
+          const totalBirds = childMarkers.reduce((sum: number, m: L.Marker) => {
+            const count = (m.options as any).totalCount || 0;
+            return sum + count;
+          }, 0);
+
+          const formattedCount = compactFormatter.format(totalBirds);
+
+          let bgColor = 'bg-orange-400';
+          if (totalBirds >= 1000) bgColor = 'bg-orange-600';
+          if (totalBirds >= 10000) bgColor = 'bg-red-600';
+
+          return L.divIcon({
+            html: `<div class="${bgColor} w-10 h-10 rounded-full border-2 border-white/50 flex items-center justify-center shadow-lg">
+                    <span class="text-white text-xs font-bold leading-none">${formattedCount}</span>
+                  </div>`,
+            className: '', 
+            iconSize: L.point(40, 40),
+            iconAnchor: [20, 20] 
+          });
+        }
+      });
+
+      data.forEach((item) => {
+        const lat = item.decimallatitude;
+        const lng = item.decimallongitude;
+
+ 
+        if (lat && lng && isInUS(lat, lng)) {
+          const count = item.individualcount || 1;
+          
+
+          const marker = L.marker([lat, lng], { totalCount: count } as any);
+          
+          marker.bindPopup(`
+            <strong>State:</strong> ${item.stateprovince || "Unknown"}<br/>
+            <strong>Count:</strong> ${formatter.format(count)}<br/>
+            <strong>Species:</strong> ${item.vernacularName || "Unknown"}<br/>
+          `);
+          
+          markers.addLayer(marker);
+        }
+      });
+
+      map.addLayer(markers);
+
+      if (markers.getLayers().length > 0) {
+        map.fitBounds(markers.getBounds(), { padding: [20, 20] });
+      }
+    } catch (e) {
+      console.error("Mapping failed", e);
+    }
+  }
+
+  if (btn) btn.addEventListener("click", initMap);
+</script>
 </Layout>
