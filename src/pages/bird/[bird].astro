@@ -1,0 +1,229 @@
+---
+import Layout from "../../layouts/BirdData.astro";
+import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
+
+export async function getStaticPaths() {
+  const url = "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
+  const file = await asyncBufferFromUrl({ 
+    url,
+    requestInit: {
+      headers: {
+        'User-Agent': 'AvesnapBot/1.0 (https://avesnap.com)',
+        'Referer': 'https://avesnap.com'
+      }
+    }
+  });
+  const data = await parquetReadObjects({
+    file,
+    compressors,
+    rowFormat: "object",
+    columns: ["vernacularName"],
+  });
+
+  const uniqueBirds = [...new Set(data.map((b: any) => b.vernacularName).filter(Boolean))];
+
+  return uniqueBirds.map((birdName) => {
+    const slug = birdName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+    return {
+      params: { bird: slug },
+      props: { birdName },
+    };
+  });
+}
+
+const { birdName } = Astro.props;
+---
+
+<Layout
+  title={`${birdName} Map`}
+  description={`Observation data and sightings map for the ${birdName}.`}
+  pubDate={new Date()}
+>
+  <div class="bird-header mb-8">
+    <a href="/full_data_pull" class="text-sm text-blue-600 hover:underline">← Back to US Birding Data</a>
+    <h2 class="text-4xl font-bold mt-4">{birdName}</h2>
+    <hr class="my-4" />
+  </div>
+
+  <div
+    id="map"
+    data-bird-target={birdName}
+    class="relative overflow-hidden bg-slate-100 border border-slate-200 shadow-xl"
+    style="height: 550px; width: 100%; border-radius: 16px;"
+  >
+    <div id="map-loader" class="absolute inset-0 z-[1000] flex flex-col items-center justify-center bg-slate-50 transition-opacity duration-500">
+      <div class="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+      <p class="text-slate-600 font-medium animate-pulse">Loading {birdName} data...</p>
+    </div>
+  </div>
+
+  <div id="stats-container" class="mt-8 hidden">
+    <div class="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+      <h3 class="text-xl font-bold text-slate-800 mb-4">Regional Distribution</h3>
+      <div class="overflow-hidden">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+            <tr>
+              <th class="px-4 py-2 rounded-l-lg">State / Province</th>
+              <th class="px-4 py-2 rounded-r-lg text-right">Individual Count</th>
+            </tr>
+          </thead>
+          <tbody id="stats-body" class="divide-y divide-slate-100">
+            </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-8 prose max-w-none bg-blue-50 p-6 rounded-xl border border-blue-100">
+    <h3 class="text-blue-900 mt-0">Data Insight</h3>
+    <p class="text-blue-800 text-sm leading-relaxed">
+      This interactive map displays sightings for the <strong>{birdName}</strong>. 
+      We use <code>hyparquet</code> to stream data directly from Parquet files via HTTP Range Requests.
+    </p>
+  </div>
+
+  <script>
+    import L from "leaflet";
+    import "leaflet.markercluster";
+    import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
+    import { compressors } from "hyparquet-compressors";
+
+    const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+    const isInUS = (lat: number, lng: number) => {
+      const isContiguous = lat >= 24.39 && lat <= 49.38 && lng >= -125.0 && lng <= -66.93;
+      const isAlaska = lat >= 51.0 && lat <= 72.0 && lng >= -179.9 && lng <= -129.0;
+      const isHawaii = lat >= 18.0 && lat <= 23.0 && lng >= -161.0 && lng <= -154.0;
+      return isContiguous || isAlaska || isHawaii;
+    };
+
+    const controller = new AbortController();
+
+    async function initBirdMap() {
+      const mapElement = document.getElementById("map");
+      const loader = document.getElementById("map-loader");
+      const statsContainer = document.getElementById("stats-container");
+      const statsBody = document.getElementById("stats-body");
+      if (!mapElement) return;
+
+      const targetBird = mapElement.dataset.birdTarget;
+      const url = "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
+      
+      const compactFormatter = new Intl.NumberFormat("en-US", {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      });
+
+      try {
+        const file = await asyncBufferFromUrl({ 
+            url, 
+            requestInit: { signal: controller.signal } 
+        });
+        
+        const data = (await parquetReadObjects({
+          file,
+          compressors,
+          rowFormat: "object",
+          columns: ["vernacularName", "decimallatitude", "decimallongitude", "individualcount", "stateprovince"],
+        })) as any[];
+
+        const filteredData = data.filter(item => 
+          item.vernacularName === targetBird && 
+          isInUS(item.decimallatitude, item.decimallongitude)
+        );
+
+        // --- STATS LOGIC ---
+        if (filteredData.length > 0 && statsContainer && statsBody) {
+          const counts = filteredData.reduce<Record<string, number>>((acc, curr) => {
+            const state = curr.stateprovince || "Other Regions";
+            acc[state] = (acc[state] || 0) + (curr.individualcount || 1);
+            return acc;
+          }, {});
+
+          const sortedStates = Object.entries(counts)
+            .sort(([, a], [, b]) => (b as number) - (a as number))
+            .slice(0, 5);
+
+          statsBody.innerHTML = sortedStates.map(([name, count]) => `
+            <tr class="hover:bg-slate-50 transition-colors">
+              <td class="px-4 py-3 font-medium text-slate-700">${name}</td>
+              <td class="px-4 py-3 text-right text-slate-600 font-mono">${count.toLocaleString()}</td>
+            </tr>
+          `).join('');
+          statsContainer.classList.remove('hidden');
+        }
+
+        if (loader) {
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 500);
+        }
+
+        // --- MAP LOGIC ---
+        const map = L.map("map", { 
+            zoomControl: false,
+            scrollWheelZoom: false // Disabled by default until click
+        }).setView([37.8, -96], 4);
+        
+        // Re-enable zoom on click/focus so user can still scroll page normally
+        map.on('click', () => { map.scrollWheelZoom.enable(); });
+        map.on('mouseout', () => { map.scrollWheelZoom.disable(); });
+
+        L.tileLayer(OSM_TILE_URL, {
+          attribution: OSM_ATTRIBUTION,
+          maxZoom: 19
+        }).addTo(map);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        const markers = (L as any).markerClusterGroup({
+          showCoverageOnHover: false,
+          spiderfyOnMaxZoom: true,
+          iconCreateFunction: (cluster: any) => {
+            const count = cluster.getAllChildMarkers().reduce((s: number, m: any) => s + (m.options.totalCount || 1), 0);
+            return L.divIcon({
+              html: `<div class="bg-blue-600 w-10 h-10 rounded-full border-2 border-white flex items-center justify-center shadow-lg text-white text-xs font-bold transition-transform hover:scale-110">
+                      ${compactFormatter.format(count)}
+                    </div>`,
+              className: '',
+              iconSize: L.point(40, 40)
+            });
+          }
+        });
+
+        filteredData.forEach(item => {
+          const marker = L.marker([item.decimallatitude, item.decimallongitude], { 
+            totalCount: item.individualcount || 1 
+          } as any);
+          
+          marker.bindPopup(`
+            <div class="font-sans p-1">
+              <p class="font-bold text-blue-700 m-0 text-base">${item.vernacularName}</p>
+              <p class="text-xs text-slate-500 mb-2 uppercase tracking-wide">${item.stateprovince || 'Unknown Location'}</p>
+              <div class="flex justify-between border-t border-slate-100 pt-2 text-sm">
+                <span class="text-slate-600">Sightings:</span>
+                <span class="font-bold text-slate-900">${item.individualcount || 1}</span>
+              </div>
+            </div>
+          `);
+          markers.addLayer(marker);
+        });
+
+        map.addLayer(markers);
+
+        if (markers.getLayers().length > 0) {
+          map.fitBounds(markers.getBounds(), { padding: [40, 40] });
+        }
+
+      } catch (err: any) {
+        if (err.name === 'AbortError') return; 
+        console.error("Map failed:", err);
+      }
+    }
+
+    initBirdMap();
+    document.addEventListener("astro:before-preparation", () => controller.abort());
+  </script>
+</Layout>

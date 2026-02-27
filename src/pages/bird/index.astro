@@ -1,0 +1,216 @@
+---
+import BaseHead from '../../components/BaseHead.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import { SITE_TITLE, SITE_DESCRIPTION } from '../../consts';
+import { asyncBufferFromUrl, parquetReadObjects } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
+
+const url = "https://data.avesnap.com/gbif-data-bucket/gbif_data/processed_aves.parquet";
+const file = await asyncBufferFromUrl({ 
+  url,
+  requestInit: {
+    headers: {
+      'User-Agent': 'AvesnapBuildProcess/1.0',
+      'Referer': 'https://avesnap.com'
+    }
+  }
+});
+
+const data = await parquetReadObjects({
+  file,
+  compressors,
+  rowFormat: "object",
+  columns: ["vernacularName", "stateprovince"],
+});
+
+const stateMap = new Map();
+
+data.forEach((row: any) => {
+  if (!row.vernacularName) return;
+  const state = row.stateprovince || "Other Regions";
+  const birdName = row.vernacularName;
+  const birdSlug = birdName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+
+  if (!stateMap.has(state)) {
+    stateMap.set(state, new Map());
+  }
+  
+  const birdsInState = stateMap.get(state);
+  if (!birdsInState.has(birdName)) {
+    birdsInState.set(birdName, birdSlug);
+  }
+});
+
+const sortedStates = Array.from(stateMap.keys()).sort().map(stateName => {
+  const birdMap = stateMap.get(stateName);
+  return {
+    name: stateName,
+    // Create a URL-friendly ID for anchor linking
+    id: `state-${stateName.toLowerCase().replace(/\s+/g, '-')}`,
+    birds: Array.from(birdMap.entries() as [string, string][])
+      .map(([name, slug]) => ({ name, slug }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  };
+});
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <BaseHead title={`Bird Directory - ${SITE_TITLE}`} description={SITE_DESCRIPTION} />
+        <style>
+            html { scroll-behavior: smooth; }
+            summary::-webkit-details-marker { display: none; }
+            summary { list-style: none; }
+            details[open] summary svg { transform: rotate(180deg); }
+            /* Offset for the sticky search bar when jumping to an ID */
+            .state-section { scroll-margin-top: 120px; }
+        </style>
+    </head>
+    <body class="bg-slate-50">
+        <Header />
+        <main class="max-w-6xl mx-auto px-4 py-12">
+            <div class="text-center mb-12">
+                <h1 class="text-4xl font-extrabold text-slate-900 mb-4">Species by State</h1>
+                <p class="text-slate-600">Explore sightings by region. Select a state to expand the species list.</p>
+            </div>
+
+            <div class="sticky top-6 z-50 mb-8 max-w-xl mx-auto">
+                <div class="relative group shadow-2xl">
+                    <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                        <svg class="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                    </div>
+                    <input 
+                        type="text" 
+                        id="bird-search" 
+                        placeholder="Search for a species..." 
+                        class="w-full pl-12 pr-5 py-4 rounded-2xl border-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all bg-white/95 backdrop-blur-md"
+                    />
+                </div>
+            </div>
+
+            <div class="mb-12">
+                <p class="text-center text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Quick Jump to Region</p>
+                <div id="state-grid" class="flex flex-wrap justify-center gap-2 max-w-4xl mx-auto">
+                    {sortedStates.map((state) => (
+                        <a 
+                            href={`#${state.id}`}
+                            class="state-grid-item px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:border-blue-500 hover:text-blue-600 hover:shadow-sm transition-all whitespace-nowrap"
+                        >
+                            {state.name}
+                        </a>
+                    ))}
+                </div>
+            </div>
+
+            <div id="directory-container" class="space-y-4">
+                {sortedStates.map((state) => (
+                    <details 
+                        id={state.id} 
+                        class="state-section group bg-white border border-slate-200 rounded-2xl overflow-hidden transition-all hover:border-slate-300 shadow-sm" 
+                        data-state={state.name}
+                    >
+                        <summary class="flex items-center justify-between p-6 cursor-pointer select-none hover:bg-slate-50/50">
+                            <div class="flex items-center gap-4">
+                                <span class="flex items-center justify-center min-w-[2.5rem] h-10 rounded-xl bg-blue-600 text-white font-bold text-sm shadow-inner">
+                                    {state.birds.length}
+                                </span>
+                                <h2 class="text-xl font-bold text-slate-800 tracking-tight">{state.name}</h2>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-xs font-semibold text-slate-400 uppercase tracking-widest hidden sm:inline">View Species</span>
+                                <svg class="w-5 h-5 text-slate-400 transition-transform duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </div>
+                        </summary>
+                        
+                        <div class="px-6 pb-8 pt-2 border-t border-slate-50">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1">
+                                {state.birds.map((bird) => (
+                                    <div class="bird-item py-1" data-bird-name={bird.name.toLowerCase()}>
+                                        <a 
+                                            href={`/bird/${bird.slug}/`} 
+                                            class="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 rounded-lg hover:bg-blue-50 hover:text-blue-700 transition-all group/link"
+                                        >
+                                            <span class="w-1.5 h-1.5 rounded-full bg-slate-200 group-hover/link:bg-blue-400 transition-colors"></span>
+                                            {bird.name}
+                                        </a>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </details>
+                ))}
+            </div>
+
+            <div id="no-results" class="hidden text-center py-32">
+                <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 text-slate-400 mb-4">
+                    <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                </div>
+                <p class="text-slate-500 text-xl font-medium">No species match your search.</p>
+                <p class="text-slate-400 text-sm mt-1">Try searching for a different bird name.</p>
+            </div>
+        </main>
+        <Footer />
+
+        <script>
+            const searchInput = document.getElementById('bird-search') as HTMLInputElement;
+            const stateSections = document.querySelectorAll('.state-section') as NodeListOf<HTMLDetailsElement>;
+            const stateGridLinks = document.querySelectorAll('.state-grid-item');
+            const noResults = document.getElementById('no-results');
+
+            searchInput?.addEventListener('input', (e) => {
+                const query = (e.target as HTMLInputElement).value.toLowerCase();
+                let anyVisibleState = false;
+
+                stateSections.forEach((section) => {
+                    const birdItems = section.querySelectorAll('.bird-item');
+                    const stateName = section.dataset.state?.toLowerCase() || "";
+                    let visibleBirdsInSection = 0;
+
+                    birdItems.forEach((item) => {
+                        const birdName = (item as HTMLElement).dataset.birdName || "";
+                        if (birdName.includes(query)) {
+                            (item as HTMLElement).classList.remove('hidden');
+                            visibleBirdsInSection++;
+                        } else {
+                            (item as HTMLElement).classList.add('hidden');
+                        }
+                    });
+
+                    // Logic: Show state if bird matches OR if state name matches the search
+                    if (visibleBirdsInSection > 0 || (stateName.includes(query) && query.length > 2)) {
+                        section.classList.remove('hidden');
+                        anyVisibleState = true;
+                        if (query.length > 0) section.open = true;
+                        
+                        // If searching for the state itself, show all birds in it
+                        if (stateName.includes(query)) {
+                            birdItems.forEach(i => (i as HTMLElement).classList.remove('hidden'));
+                        }
+                    } else {
+                        section.classList.add('hidden');
+                        section.open = false;
+                    }
+                });
+
+                // Update Grid Links: Hide links to states that are filtered out
+                stateGridLinks.forEach((link) => {
+                   const stateTarget = (link as HTMLAnchorElement).getAttribute('href')?.substring(1);
+                   const targetSection = document.getElementById(stateTarget || "");
+                   if (targetSection?.classList.contains('hidden')) {
+                       (link as HTMLElement).classList.add('opacity-20', 'pointer-events-none');
+                   } else {
+                       (link as HTMLElement).classList.remove('opacity-20', 'pointer-events-none');
+                   }
+                });
+
+                if (noResults) {
+                    !anyVisibleState ? noResults.classList.remove('hidden') : noResults.classList.add('hidden');
+                }
+            });
+        </script>
+    </body>
+</html>
